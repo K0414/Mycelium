@@ -61,28 +61,44 @@ def serve(
 @click.argument("prompt")
 @click.option("--model", required=True, help="Model to query on the network.")
 @click.option("--bootstrap", multiple=True, help="Bootstrap peer multiaddr(s).")
-def chat(prompt: str, model: str, bootstrap: tuple[str, ...]) -> None:
+@click.option("--max-tokens", default=50, help="Max tokens to generate.")
+def chat(
+    prompt: str,
+    model: str,
+    bootstrap: tuple[str, ...],
+    max_tokens: int,
+) -> None:
     """Send an inference request to the Mycelium network."""
+    import tempfile
+
     import trio
 
     from mycelium.node.config import NodeConfig
     from mycelium.node.host import MyceliumNode
+    from mycelium.utils.logging import setup_logging
 
-    config = NodeConfig(
-        bootstrap_peers=list(bootstrap),
-    )
+    setup_logging()
 
-    async def _run_chat() -> None:
-        node = MyceliumNode(config)
-        async with trio.open_nursery() as nursery:
-            await nursery.start(node.start)
-            try:
-                from mycelium.inference.pipeline import InferencePipeline
+    # Use a temp dir so the chat client gets its own ephemeral identity
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = NodeConfig(
+            bootstrap_peers=list(bootstrap),
+            data_dir=Path(tmpdir),
+        )
 
-                pipeline = InferencePipeline(node)
-                result = await pipeline.submit_request(model, prompt)
-                click.echo(result)
-            finally:
-                nursery.cancel_scope.cancel()
+        async def _run_chat() -> None:
+            node = MyceliumNode(config)
+            async with trio.open_nursery() as nursery:
+                await nursery.start(node.start)
+                try:
+                    from mycelium.inference.pipeline import InferencePipeline
 
-    trio.run(_run_chat)
+                    pipeline = InferencePipeline(node)
+                    result = await pipeline.submit_request(
+                        model, prompt, max_tokens=max_tokens,
+                    )
+                    click.echo(result)
+                finally:
+                    nursery.cancel_scope.cancel()
+
+        trio.run(_run_chat)

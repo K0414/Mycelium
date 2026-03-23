@@ -27,11 +27,11 @@ class ShardInfo:
 class MyceliumValidator(Validator):
     """Validator for Mycelium DHT records."""
 
-    async def validate(self, key: str, value: bytes) -> None:
+    def validate(self, key: str, value: bytes) -> None:
         if not value:
             raise ValueError("Empty value")
 
-    async def select(self, key: str, values: list[bytes]) -> int:
+    def select(self, key: str, values: list[bytes]) -> int:
         return 0
 
 

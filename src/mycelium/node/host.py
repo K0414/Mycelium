@@ -12,7 +12,7 @@ from libp2p.kad_dht.kad_dht import DHTMode, KadDHT
 from libp2p.pubsub.gossipsub import GossipSub
 from libp2p.pubsub.pubsub import Pubsub
 from libp2p.stream_muxer.mplex.mplex import MPLEX_PROTOCOL_ID, Mplex
-from libp2p.tools.anyio_service import background_trio_service
+from libp2p.tools.async_service import background_trio_service
 from libp2p.tools.utils import info_from_p2p_addr
 from libp2p.utils.address_validation import find_free_port, get_available_interfaces
 
@@ -114,8 +114,11 @@ class MyceliumNode:
                         maddr = multiaddr.Multiaddr(addr_str)
                         info = info_from_p2p_addr(maddr)
                         await self.host.connect(info)
-                        self.dht.peer_manager.add_peer(info.peer_id, info.addrs)
-                        logger.info("Connected to bootstrap peer %s", info.peer_id)
+                        await self.dht.add_peer(info.peer_id)
+                        logger.info(
+                            "Connected to bootstrap peer %s",
+                            info.peer_id,
+                        )
                     except Exception:
                         logger.warning(
                             "Failed to connect to bootstrap peer %s",
@@ -136,9 +139,12 @@ class MyceliumNode:
 
                 # Print listening addresses
                 addrs = self.host.get_addrs()
-                logger.info("Mycelium node started — Peer ID: %s", self.peer_id)
+                logger.info(
+                    "Mycelium node started — Peer ID: %s",
+                    self.peer_id,
+                )
                 for addr in addrs:
-                    logger.info("  Listening on: %s/p2p/%s", addr, self.peer_id)
+                    logger.info("  Listening on: %s", addr)
 
                 task_status.started()
 

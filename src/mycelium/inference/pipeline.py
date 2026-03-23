@@ -108,12 +108,18 @@ class InferencePipeline:
 
         return None
 
-    async def submit_request(self, model_name: str, prompt: str) -> str:
+    async def submit_request(
+        self,
+        model_name: str,
+        prompt: str,
+        max_tokens: int = 50,
+    ) -> str:
         """Submit an inference request as a client.
 
-        Tokenizes the prompt, discovers the pipeline, sends input_ids to the
-        first shard, and returns the decoded output.
+        Performs autoregressive generation: sends input_ids through
+        the pipeline, appends the predicted token, and repeats.
         """
+        import torch
         from transformers import AutoTokenizer
 
         tokenizer = await trio.to_thread.run_sync(
@@ -126,34 +132,55 @@ class InferencePipeline:
         pipeline = build_pipeline(shards)
 
         if not pipeline:
-            raise RuntimeError(f"No shards found for model {model_name}")
+            raise RuntimeError(
+                f"No shards found for model {model_name}"
+            )
 
         first_peer_id = pipeline[0].peer_id
         request_id = str(uuid.uuid4())
 
         logger.info(
-            "Submitting request %s to pipeline of %d shards (first peer: %s)",
-            request_id, len(pipeline), first_peer_id,
+            "Submitting request %s to pipeline of %d shards",
+            request_id, len(pipeline),
         )
-
-        # Send input_ids to the first shard
-        payload = serialize_activation(request_id, input_ids)
 
         from libp2p.peer.id import ID
 
-        stream = await self.node.host.new_stream(
-            ID.from_base58(first_peer_id), [INFERENCE_PROTOCOL],
+        eos_token_id = tokenizer.eos_token_id
+        generated_ids: list[int] = []
+
+        for _ in range(max_tokens):
+            payload = serialize_activation(request_id, input_ids)
+
+            stream = await self.node.host.new_stream(
+                ID.from_base58(first_peer_id),
+                [INFERENCE_PROTOCOL],
+            )
+            await stream.write(payload)
+
+            response_data = await stream.read(MAX_READ_LEN)
+            await stream.close()
+
+            response = msgpack.unpackb(response_data, raw=False)
+
+            if "error" in response and response["error"]:
+                raise RuntimeError(
+                    f"Inference error: {response['error']}"
+                )
+
+            # Last token predicted
+            next_token_id = response["token_ids"][-1]
+            generated_ids.append(next_token_id)
+
+            if next_token_id == eos_token_id:
+                break
+
+            # Append and continue
+            next_token = torch.tensor(
+                [[next_token_id]], dtype=torch.long,
+            )
+            input_ids = torch.cat([input_ids, next_token], dim=-1)
+
+        return tokenizer.decode(
+            generated_ids, skip_special_tokens=True,
         )
-        await stream.write(payload)
-
-        # Read response
-        response_data = await stream.read(MAX_READ_LEN)
-        await stream.close()
-
-        response = msgpack.unpackb(response_data, raw=False)
-
-        if "error" in response and response["error"]:
-            raise RuntimeError(f"Inference error: {response['error']}")
-
-        token_ids = response["token_ids"]
-        return tokenizer.decode(token_ids, skip_special_tokens=True)
